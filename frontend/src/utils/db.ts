@@ -3,10 +3,11 @@ import type { Plot } from '../types/plot';
 import type { TreeRecord } from '../types/tree';
 import type { RegenShrub } from '../types/regen';
 import type { RecheckDiff } from '../types/recheck';
+import type { Submission } from '../types/submission';
 import { newId } from './id';
 
 export const DB_NAME = 'gbforestplot';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbforestplot:db-version';
 
 class ForestPlotDB extends Dexie {
@@ -14,6 +15,7 @@ class ForestPlotDB extends Dexie {
   trees!: Table<TreeRecord, string>;
   regens!: Table<RegenShrub, string>;
   rechecks!: Table<RecheckDiff, string>;
+  submissions!: Table<Submission, string>;
 
   constructor() {
     super(DB_NAME);
@@ -46,6 +48,14 @@ class ForestPlotDB extends Dexie {
             if (row.measuredAt === undefined) row.measuredAt = Date.now();
           });
       });
+    // v3：新增送审档案表（每期次的送审版本与审核意见留档）
+    this.version(3).stores({
+      plots: 'id, plotNo, locality, forestType, surveyRound, locked, createdAt',
+      trees: 'id, plotId, treeNo, species, round, status, measuredAt',
+      regens: 'id, plotId, layer, species, round, heightCm',
+      rechecks: 'id, plotId, baseRound, targetRound, treeNo, generatedAt',
+      submissions: 'id, plotId, round, status, version, submittedAt',
+    });
   }
 }
 
@@ -266,11 +276,138 @@ export async function ensureSeedData(): Promise<void> {
       browseDamage: '无',
       round: 2,
     },
+    {
+      id: newId('regen'),
+      plotId: plot2Id,
+      layer: '灌木',
+      species: '胡枝子',
+      heightCm: 86,
+      count: 12,
+      ageGroup: '多年生',
+      distribution: '团状',
+      browseDamage: '轻度',
+      round: 1,
+    },
   ];
 
-  await db.transaction('rw', db.plots, db.trees, db.regens, db.rechecks, async () => {
-    await db.plots.bulkPut(plots);
-    await db.trees.bulkPut(trees);
-    await db.regens.bulkPut(regens);
-  });
+  // 送审档案示范：
+  // 1) FP-4102 第 2 期 → 已通过归档（历史版本永久留档）
+  // 2) FP-4115 第 1 期 v1 → 被退回；v2 → 再次送审待审核（旧记录保留，当前期停改）
+  const p1 = plots[0];
+  const p2 = plots[1];
+  const p1TreesR2 = trees.filter((t) => t.plotId === plotId && t.round === 2);
+  const p1RegensR2 = regens.filter((r) => r.plotId === plotId && r.round === 2);
+  const p2TreesR1 = trees.filter((t) => t.plotId === plot2Id && t.round === 1);
+  const p2RegensR1 = regens.filter((r) => r.plotId === plot2Id && r.round === 1);
+
+  const approvedAt = now - 2 * day;
+  const returnedAt = now - 2 * day;
+  const resubmittedAt = now - day;
+
+  const submissions: Submission[] = [
+    {
+      id: newId('sub'),
+      plotId,
+      plotNo: p1.plotNo,
+      round: 2,
+      version: 1,
+      status: 'approved',
+      note: '第 2 期复查记录，样木复测与更新苗样方已整理完毕',
+      submittedBy: '顾青',
+      submittedAt: now - 3 * day,
+      snapshot: {
+        plot: structuredClone(p1),
+        trees: structuredClone(p1TreesR2),
+        regens: structuredClone(p1RegensR2),
+      },
+      reviews: [
+        {
+          id: newId('rev'),
+          action: 'submit',
+          actor: '顾青',
+          comment: '请审核第 2 期复查成果。',
+          at: now - 3 * day,
+        },
+        {
+          id: newId('rev'),
+          action: 'approve',
+          actor: '质量科 · 沈柏',
+          comment: '复测株数与上期衔接完整，生长量合理，同意归档。',
+          at: approvedAt,
+        },
+      ],
+    },
+    {
+      id: newId('sub'),
+      plotId: plot2Id,
+      plotNo: p2.plotNo,
+      round: 1,
+      version: 1,
+      status: 'returned',
+      note: '第 1 期初查记录（首轮送审）',
+      submittedBy: '周砚',
+      submittedAt: now - 5 * day,
+      snapshot: {
+        plot: structuredClone(p2),
+        trees: structuredClone(p2TreesR1),
+        regens: [],
+      },
+      reviews: [
+        {
+          id: newId('rev'),
+          action: 'submit',
+          actor: '周砚',
+          comment: '15 林班样木记录，请审核。',
+          at: now - 5 * day,
+        },
+        {
+          id: newId('rev'),
+          action: 'return',
+          actor: '质量科 · 沈柏',
+          comment: '缺少更新苗与灌木样方记录，且样木冠幅未逐株登记，退回补录后再送审。',
+          at: returnedAt,
+        },
+      ],
+    },
+    {
+      id: newId('sub'),
+      plotId: plot2Id,
+      plotNo: p2.plotNo,
+      round: 1,
+      version: 2,
+      status: 'pending',
+      note: '按退回意见补齐灌木样方与冠幅后重新送审',
+      submittedBy: '周砚',
+      submittedAt: resubmittedAt,
+      snapshot: {
+        plot: structuredClone(p2),
+        trees: structuredClone(p2TreesR1),
+        regens: structuredClone(p2RegensR1),
+      },
+      reviews: [
+        {
+          id: newId('rev'),
+          action: 'submit',
+          actor: '周砚',
+          comment: '已补登灌木样方（胡枝子 12 株）与冠幅，请复核。',
+          at: resubmittedAt,
+        },
+      ],
+    },
+  ];
+
+  await db.transaction(
+    'rw',
+    db.plots,
+    db.trees,
+    db.regens,
+    db.rechecks,
+    db.submissions,
+    async () => {
+      await db.plots.bulkPut(plots);
+      await db.trees.bulkPut(trees);
+      await db.regens.bulkPut(regens);
+      await db.submissions.bulkPut(submissions);
+    },
+  );
 }

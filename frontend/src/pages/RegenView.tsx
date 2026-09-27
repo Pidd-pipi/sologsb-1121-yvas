@@ -13,12 +13,15 @@ import {
   Statistic,
   Table,
   Tag,
+  Tooltip,
   Typography,
   type TableProps,
 } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { usePlotStore } from '../stores/plotStore';
 import { useRegenStore } from '../stores/regenStore';
+import { useSubmissionStore } from '../stores/submissionStore';
+import { isSubmissionFrozen } from '../types/submission';
 import RoundTag from '../components/common/RoundTag';
 import {
   AGE_GROUPS,
@@ -41,8 +44,17 @@ export default function RegenView() {
   const { id = '' } = useParams();
   const plot = usePlotStore((s) => s.items.find((p) => p.id === id));
   const regens = useRegenStore((s) => s.items);
+  const submissions = useSubmissionStore((s) => s.items);
   const addRegen = useRegenStore((s) => s.add);
   const removeRegen = useRegenStore((s) => s.remove);
+
+  /** 某期次最新送审版本 */
+  const latestOf = (round: number) =>
+    submissions
+      .filter((sb) => sb.plotId === id && sb.round === round)
+      .sort((a, b) => b.version - a.version)[0];
+  const currentFreeze = latestOf(plot?.surveyRound ?? 1);
+  const currentFrozen = isSubmissionFrozen(currentFreeze);
 
   const rows = useMemo(
     () => regens.filter((r) => r.plotId === id).sort((a, b) => a.layer.localeCompare(b.layer) || b.heightCm - a.heightCm),
@@ -110,11 +122,22 @@ export default function RegenView() {
     {
       title: '操作',
       width: 90,
-      render: (_: unknown, row: RegenShrub) => (
-        <Button size="small" danger onClick={() => removeRegen(row.id)}>
-          删除
-        </Button>
-      ),
+      render: (_: unknown, row: RegenShrub) => {
+        const rowFreeze = latestOf(row.round);
+        const rowFrozen = isSubmissionFrozen(rowFreeze);
+        return (
+          <Tooltip title={rowFrozen ? `第 ${row.round} 期${rowFreeze?.status === 'approved' ? '已归档' : '送审中'}，记录只读` : ''}>
+            <Button
+              size="small"
+              danger
+              disabled={rowFrozen}
+              onClick={() => removeRegen(row.id)}
+            >
+              删除
+            </Button>
+          </Tooltip>
+        );
+      },
     },
   ];
 
@@ -133,7 +156,12 @@ export default function RegenView() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           更新苗与灌木层 · {plot.plotNo}
         </Typography.Title>
-        <RoundTag round={plot.surveyRound} locked={plot.locked} />
+        <RoundTag
+          round={plot.surveyRound}
+          locked={plot.locked}
+          frozen={currentFrozen}
+          frozenText={currentFreeze?.status === 'approved' ? ' · 已归档' : ' · 送审停改'}
+        />
         <Tag>样地面积 {plot.area} m²</Tag>
         <div style={{ flex: 1 }} />
         <Button type="link">
@@ -149,8 +177,28 @@ export default function RegenView() {
 
       {toast ? <Alert type="success" showIcon message={toast} closable onClose={() => setToast('')} /> : null}
       {error ? <Alert type="error" showIcon message={error} closable onClose={() => setError('')} /> : null}
+      {currentFrozen ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={
+            currentFreeze?.status === 'approved'
+              ? `第 ${plot.surveyRound} 期已于 v${currentFreeze.version} 审核归档，样方记录只读`
+              : `第 ${plot.surveyRound} 期已送审（v${currentFreeze?.version ?? 1}），审核结果出来前暂停新增与删除`
+          }
+          description="审核退回后本页自动恢复可编辑；冻结版本的样方记录可在台账「送审档案」中查看。"
+        />
+      ) : currentFreeze?.status === 'returned' ? (
+        <Alert
+          type="error"
+          showIcon
+          message={`第 ${plot.surveyRound} 期上一送审版本 v${currentFreeze.version} 已被退回，请补录样方后再次送审（旧版本已留档）`}
+          description={[...currentFreeze.reviews].reverse().find((r) => r.action === 'return')?.comment}
+        />
+      ) : null}
 
-      <Card size="small" title="登记样方记录">
+      <Card size="small" title={`登记样方记录（第 ${plot.surveyRound} 期）`}>
+        <fieldset disabled={currentFrozen} style={{ border: 'none', padding: 0, margin: 0 }}>
         <Space wrap size={8}>
           <Select
             style={{ width: 110 }}
@@ -219,6 +267,12 @@ export default function RegenView() {
             保存记录
           </Button>
         </Space>
+        </fieldset>
+        {currentFrozen ? (
+          <Typography.Paragraph type="warning" style={{ marginTop: 8, marginBottom: 0 }}>
+            本期{currentFreeze?.status === 'approved' ? '已归档' : '已送审'}，新增登记已暂停，等待{currentFreeze?.status === 'approved' ? '' : '退回或'}审核结果。
+          </Typography.Paragraph>
+        ) : null}
       </Card>
 
       <Row gutter={12}>

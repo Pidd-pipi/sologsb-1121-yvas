@@ -8,11 +8,14 @@ export interface PlotCardProps {
   plot: Plot;
   treeCount?: number;
   onOpen?: (id: string) => void;
+  /** 当期因送审停改 */
+  frozen?: boolean;
+  frozenText?: string;
   footer?: ReactNode;
 }
 
 /** 样地摘要卡（样地号、地点、面积、郁闭度、优势树种），被样地台账与汇总页消费 */
-export default function PlotCard({ plot, treeCount, onOpen, footer }: PlotCardProps) {
+export default function PlotCard({ plot, treeCount, onOpen, frozen, frozenText, footer }: PlotCardProps) {
   return (
     <Card
       size="small"
@@ -21,7 +24,7 @@ export default function PlotCard({ plot, treeCount, onOpen, footer }: PlotCardPr
       title={
         <Space size={6} wrap>
           <span data-testid={`plot-card-${plot.plotNo}`}>{plot.plotNo}</span>
-          <RoundTag round={plot.surveyRound} locked={plot.locked} />
+          <RoundTag round={plot.surveyRound} locked={plot.locked} frozen={frozen} frozenText={frozenText} />
         </Space>
       }
     >

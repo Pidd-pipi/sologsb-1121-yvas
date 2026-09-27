@@ -5,6 +5,7 @@ import { ExperimentOutlined } from '@ant-design/icons';
 import { usePlotStore } from '../stores/plotStore';
 import { useTreeStore } from '../stores/treeStore';
 import { useRegenStore } from '../stores/regenStore';
+import { useSubmissionStore } from '../stores/submissionStore';
 import { ensureSeedData, markDbVersion, readDbVersion } from '../utils/db';
 import PlotList from '../pages/PlotList';
 import TreeEntry from '../pages/TreeEntry';
@@ -82,19 +83,20 @@ export default function AppRouter() {
   const loadPlots = usePlotStore((s) => s.load);
   const loadTrees = useTreeStore((s) => s.load);
   const loadRegens = useRegenStore((s) => s.load);
+  const loadSubmissions = useSubmissionStore((s) => s.load);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       await ensureSeedData();
       markDbVersion();
-      await Promise.all([loadPlots(), loadTrees(), loadRegens()]);
+      await Promise.all([loadPlots(), loadTrees(), loadRegens(), loadSubmissions()]);
       if (alive) setReady(true);
     })();
     return () => {
       alive = false;
     };
-  }, [loadPlots, loadTrees, loadRegens]);
+  }, [loadPlots, loadTrees, loadRegens, loadSubmissions]);
 
   if (!ready) {
     return (

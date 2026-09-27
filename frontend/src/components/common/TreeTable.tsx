@@ -10,6 +10,8 @@ export interface TreeTableProps {
   peers?: TreeRecord[];
   /** 行内改胸径 */
   onDbhChange?: (id: string, dbhCm: number) => void;
+  /** 只读：送审冻结或查看历史快照时禁用行内编辑 */
+  readOnly?: boolean;
   /** 是否展示径阶分组统计 */
   showClassSummary?: boolean;
   emptyText?: string;
@@ -22,10 +24,12 @@ export default function TreeTable({
   items,
   peers,
   onDbhChange,
+  readOnly = false,
   showClassSummary = true,
   emptyText = '暂无样木记录',
 }: TreeTableProps) {
   const reference = peers && peers.length > 0 ? peers : items;
+  const editable = !!onDbhChange && !readOnly;
 
   const sorted = [...items].sort((a, b) => {
     const ca = diameterClassLabel(a.dbhCm);
@@ -49,7 +53,7 @@ export default function TreeTable({
         const abnormal = isDbhAbnormal(row, reference);
         return (
           <span>
-            {onDbhChange ? (
+            {editable ? (
               <InputNumber
                 size="small"
                 min={0}

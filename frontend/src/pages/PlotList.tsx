@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
+  Badge,
   Button,
   Card,
   Col,
@@ -16,14 +17,19 @@ import {
   Space,
   Statistic,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, SendOutlined, FileSearchOutlined } from '@ant-design/icons';
 import { usePlotStore } from '../stores/plotStore';
 import { useTreeStore } from '../stores/treeStore';
 import { useRegenStore } from '../stores/regenStore';
+import { useSubmissionStore } from '../stores/submissionStore';
 import { usePlotFilter } from '../hooks/usePlotFilter';
 import PlotCard from '../components/common/PlotCard';
+import SubmitForReviewModal from '../components/submission/SubmitForReviewModal';
+import ReviewArchiveDrawer from '../components/submission/ReviewArchiveDrawer';
+import { isSubmissionFrozen, SUBMISSION_STATUS_META } from '../types/submission';
 import { FOREST_TYPES, PLOT_SHAPES, type PlotDraft, type PlotShape } from '../types/plot';
 
 const EMPTY: PlotDraft = {
@@ -53,12 +59,34 @@ export default function PlotList() {
   const toggleLock = usePlotStore((s) => s.toggleLock);
   const trees = useTreeStore((s) => s.items);
   const regens = useRegenStore((s) => s.items);
+  const submissions = useSubmissionStore((s) => s.items);
   const { filters, patch, reset, result, options } = usePlotFilter();
 
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<PlotDraft>(EMPTY);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [submitOpen, setSubmitOpen] = useState(false);
+  const [submitPlotId, setSubmitPlotId] = useState<string | undefined>(undefined);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [archivePlotId, setArchivePlotId] = useState<string | undefined>(undefined);
+
+  /** 样地当期次的最新送审版本 */
+  const latestOf = (plotId: string, round: number) =>
+    submissions
+      .filter((s) => s.plotId === plotId && s.round === round)
+      .sort((a, b) => b.version - a.version)[0];
+
+  const pendingCount = submissions.filter((s) => s.status === 'pending').length;
+
+  const openSubmit = (plotId?: string) => {
+    setSubmitPlotId(plotId);
+    setSubmitOpen(true);
+  };
+  const openArchive = (plotId?: string) => {
+    setArchivePlotId(plotId);
+    setArchiveOpen(true);
+  };
 
   useEffect(() => {
     if (!toast) return;
@@ -101,6 +129,16 @@ export default function PlotList() {
         <Tag>共 {plots.length} 个样地</Tag>
         <Tag color="blue">筛选命中 {result.length} 个</Tag>
         <div style={{ flex: 1 }} />
+        <Tooltip title="查看每期送审版本与审核意见；审核人可退回补录或通过归档">
+          <Badge count={pendingCount} showZero={false} size="small" color="#1677ff">
+            <Button icon={<FileSearchOutlined />} onClick={() => openArchive()}>
+              送审档案
+            </Button>
+          </Badge>
+        </Tooltip>
+        <Button icon={<SendOutlined />} onClick={() => openSubmit()}>
+          本期送审
+        </Button>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
           新建样地
         </Button>
@@ -197,33 +235,71 @@ export default function PlotList() {
         <Empty description="没有符合条件的样地" />
       ) : (
         <Row gutter={[12, 12]}>
-          {result.map((plot) => (
-            <Col key={plot.id} xs={24} md={12} xl={8}>
-              <PlotCard
-                plot={plot}
-                treeCount={trees.filter((t) => t.plotId === plot.id && t.round === plot.surveyRound).length}
-                footer={
-                  <Space wrap size={4}>
-                    <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/trees`)}>
-                      样木录入
-                    </Button>
-                    <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/regen`)}>
-                      更新与灌木
-                    </Button>
-                    <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/recheck`)}>
-                      复查比对
-                    </Button>
-                    <Button size="small" type="link" onClick={() => navigate(`/summary/${plot.id}`)}>
-                      林分汇总
-                    </Button>
-                    <Button size="small" danger={!plot.locked} onClick={() => toggleLock(plot.id)}>
-                      {plot.locked ? '解锁往期' : '锁定往期'}
-                    </Button>
-                  </Space>
-                }
-              />
-            </Col>
-          ))}
+          {result.map((plot) => {
+            const latest = latestOf(plot.id, plot.surveyRound);
+            const frozen = isSubmissionFrozen(latest);
+            return (
+              <Col key={plot.id} xs={24} md={12} xl={8}>
+                <PlotCard
+                  plot={plot}
+                  treeCount={trees.filter((t) => t.plotId === plot.id && t.round === plot.surveyRound).length}
+                  frozen={frozen}
+                  frozenText={latest?.status === 'approved' ? ' · 已归档' : ' · 送审停改'}
+                  footer={
+                    <Space wrap size={4}>
+                      <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/trees`)}>
+                        样木录入
+                      </Button>
+                      <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/regen`)}>
+                        更新与灌木
+                      </Button>
+                      <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/recheck`)}>
+                        复查比对
+                      </Button>
+                      <Button size="small" type="link" onClick={() => navigate(`/summary/${plot.id}`)}>
+                        林分汇总
+                      </Button>
+                      <Tooltip
+                        title={
+                          latest?.status === 'pending'
+                            ? '该期正在审核中，退回后方可补录'
+                            : latest?.status === 'approved'
+                              ? '该期已审核归档'
+                              : latest?.status === 'returned'
+                                ? `上一版本 v${latest.version} 已退回，补录后可再次送审（旧版本保留）`
+                                : '整理当期记录并提交审核，提交后本期停改'
+                        }
+                      >
+                        <Button
+                          size="small"
+                          type="link"
+                          disabled={frozen}
+                          icon={<SendOutlined />}
+                          onClick={() => openSubmit(plot.id)}
+                        >
+                          {latest?.status === 'returned' ? '再次送审' : '送审'}
+                        </Button>
+                      </Tooltip>
+                      <Button size="small" type="link" onClick={() => openArchive(plot.id)}>
+                        送审档案
+                        {latest ? (
+                          <Tag
+                            color={SUBMISSION_STATUS_META[latest.status].color}
+                            style={{ marginInlineStart: 4, marginInlineEnd: 0 }}
+                          >
+                            v{latest.version} {SUBMISSION_STATUS_META[latest.status].label}
+                          </Tag>
+                        ) : null}
+                      </Button>
+                      <Button size="small" danger={!plot.locked} onClick={() => toggleLock(plot.id)}>
+                        {plot.locked ? '解锁往期' : '锁定往期'}
+                      </Button>
+                    </Space>
+                  }
+                />
+              </Col>
+            );
+          })}
         </Row>
       )}
 
@@ -313,6 +389,17 @@ export default function PlotList() {
           </Space>
         </Space>
       </Modal>
+
+      <SubmitForReviewModal
+        open={submitOpen}
+        defaultPlotId={submitPlotId}
+        onClose={() => setSubmitOpen(false)}
+        onSubmitted={(plotId, r) => {
+          const p = plots.find((it) => it.id === plotId);
+          setToast(`「${p?.plotNo ?? ''}」第 ${r} 期记录已送审，该期次已停改，等待审核意见`);
+        }}
+      />
+      <ReviewArchiveDrawer open={archiveOpen} defaultPlotId={archivePlotId} onClose={() => setArchiveOpen(false)} />
     </Space>
   );
 }

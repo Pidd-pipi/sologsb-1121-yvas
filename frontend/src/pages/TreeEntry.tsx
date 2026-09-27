@@ -20,8 +20,10 @@ import { PlusOutlined } from '@ant-design/icons';
 import { usePlotStore } from '../stores/plotStore';
 import { useTreeStore } from '../stores/treeStore';
 import { useTreeStats } from '../hooks/useTreeStats';
+import { useRoundFreeze } from '../hooks/useRoundFreeze';
 import TreeTable from '../components/common/TreeTable';
 import RoundTag from '../components/common/RoundTag';
+import { SUBMISSION_STATUS_META } from '../types/submission';
 import {
   HEALTH_CLASSES,
   TREE_ORIGINS,
@@ -52,6 +54,7 @@ export default function TreeEntry() {
   }, [plot?.id]);
 
   const stats = useTreeStats(id, round);
+  const { latest: freezeLatest, frozen } = useRoundFreeze(id, round);
   const peers = trees.filter((t) => t.plotId === id);
 
   const [speciesFilter, setSpeciesFilter] = useState('all');
@@ -122,7 +125,12 @@ export default function TreeEntry() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           样木录入 · {plot.plotNo}
         </Typography.Title>
-        <RoundTag round={round} locked={plot.locked} />
+        <RoundTag
+          round={round}
+          locked={plot.locked}
+          frozen={frozen}
+          frozenText={freezeLatest?.status === 'approved' ? ' · 已归档' : ' · 送审停改'}
+        />
         <Tag>{plot.forestType}</Tag>
         <Tag color="green">优势树种 {plot.dominantSpecies}</Tag>
         <div style={{ flex: 1 }} />
@@ -171,10 +179,45 @@ export default function TreeEntry() {
 
       {toast ? <Alert type="success" showIcon message={toast} closable onClose={() => setToast('')} /> : null}
       {error ? <Alert type="error" showIcon message={error} closable onClose={() => setError('')} /> : null}
+      {frozen ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={
+            freezeLatest?.status === 'approved'
+              ? `第 ${round} 期记录已于 v${freezeLatest.version} 审核归档，永久停改，仅可查看`
+              : `第 ${round} 期记录已送审（v${freezeLatest?.version ?? 1}），审核结果出来前暂停补录与修改`
+          }
+          description={
+            freezeLatest
+              ? `当前状态：${SUBMISSION_STATUS_META[freezeLatest.status].label}；审核退回后本页自动恢复可编辑。`
+              : ''
+          }
+        />
+      ) : freezeLatest?.status === 'returned' ? (
+        <Alert
+          type="error"
+          showIcon
+          message={`第 ${round} 期上一送审版本 v${freezeLatest.version} 已被退回，请按审核意见补录后再次送审（旧版本已留档）`}
+          description={
+            [...freezeLatest.reviews].reverse().find((r) => r.action === 'return')?.comment
+          }
+        />
+      ) : null}
 
       <Row gutter={12}>
         <Col span={12}>
-          <Card size="small" title={`第 ${round} 期快速录入`}>
+          {frozen ? (
+            <Card size="small" title={`第 ${round} 期快速录入`}>
+              <Alert
+                type="warning"
+                showIcon
+                message={freezeLatest?.status === 'approved' ? '该期已归档，样木记录只读' : '本期已送审，样木暂停录入与修改'}
+                description="退回补录后可继续在本页登记；各送审版本的冻结记录可在台账「送审档案」中查看。"
+              />
+            </Card>
+          ) : (
+            <Card size="small" title={`第 ${round} 期快速录入`}>
             <Space wrap size={8}>
               <Input
                 style={{ width: 110 }}
@@ -275,7 +318,8 @@ export default function TreeEntry() {
             <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
               当前待录径阶：{diameterClassLabel(form.dbhCm)} cm（按「6/8/12/16/20/24/28/32+」径阶自动归组）
             </Typography.Paragraph>
-          </Card>
+            </Card>
+          )}
         </Col>
         <Col span={12}>
           <Card size="small" title="本期林分速览">
@@ -312,10 +356,14 @@ export default function TreeEntry() {
         </Col>
       </Row>
 
-      <Card size="small" title={`第 ${round} 期样木清单（${rows.length} 株，可点胸径单元格直接修改）`}>
+      <Card
+        size="small"
+        title={`第 ${round} 期样木清单（${rows.length} 株${frozen ? '，本期只读' : '，可点胸径单元格直接修改'}）`}
+      >
         <TreeTable
           items={rows}
           peers={peers}
+          readOnly={frozen}
           onDbhChange={async (treeId, dbhCm) => {
             await updateTree(treeId, { dbhCm });
             setToast('胸径已更新，径阶与断面积同步重算');
