@@ -5,12 +5,14 @@ import { ExperimentOutlined } from '@ant-design/icons';
 import { usePlotStore } from '../stores/plotStore';
 import { useTreeStore } from '../stores/treeStore';
 import { useRegenStore } from '../stores/regenStore';
+import { useSubmissionStore } from '../stores/submissionStore';
 import { ensureSeedData, markDbVersion, readDbVersion } from '../utils/db';
 import PlotList from '../pages/PlotList';
 import TreeEntry from '../pages/TreeEntry';
 import RegenView from '../pages/RegenView';
 import RecheckView from '../pages/RecheckView';
 import PlotSummary from '../pages/PlotSummary';
+import ReviewCenter from '../pages/ReviewCenter';
 
 const { Header, Content } = Layout;
 
@@ -18,6 +20,7 @@ function Shell() {
   const location = useLocation();
   const navigate = useNavigate();
   const plots = usePlotStore((s) => s.items);
+  const pendingCount = useSubmissionStore((s) => s.items.filter((r) => r.status === 'submitted').length);
   const version = readDbVersion();
 
   const firstPlotId = plots[0]?.id;
@@ -29,12 +32,21 @@ function Shell() {
       { key: firstPlotId ? `/plots/${firstPlotId}/regen` : '/plots', label: '更新与灌木' },
       { key: firstPlotId ? `/plots/${firstPlotId}/recheck` : '/plots', label: '复查比对' },
       { key: firstPlotId ? `/summary/${firstPlotId}` : '/plots', label: '林分汇总' },
+      {
+        key: '/reviews',
+        label: (
+          <Badge count={pendingCount} size="small" offset={[10, -2]}>
+            送审审核
+          </Badge>
+        ),
+      },
     ],
-    [firstPlotId],
+    [firstPlotId, pendingCount],
   );
 
   const selected = useMemo(() => {
     const path = location.pathname;
+    if (path.startsWith('/reviews')) return '/reviews';
     if (path.startsWith('/summary')) return items[4].key;
     if (path.endsWith('/trees')) return items[1].key;
     if (path.endsWith('/regen')) return items[2].key;
@@ -69,6 +81,7 @@ function Shell() {
           <Route path="/plots/:id/regen" element={<RegenView />} />
           <Route path="/plots/:id/recheck" element={<RecheckView />} />
           <Route path="/summary/:plotId" element={<PlotSummary />} />
+          <Route path="/reviews" element={<ReviewCenter />} />
           <Route path="*" element={<Navigate to="/plots" replace />} />
         </Routes>
       </Content>
@@ -82,19 +95,20 @@ export default function AppRouter() {
   const loadPlots = usePlotStore((s) => s.load);
   const loadTrees = useTreeStore((s) => s.load);
   const loadRegens = useRegenStore((s) => s.load);
+  const loadSubmissions = useSubmissionStore((s) => s.load);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       await ensureSeedData();
       markDbVersion();
-      await Promise.all([loadPlots(), loadTrees(), loadRegens()]);
+      await Promise.all([loadPlots(), loadTrees(), loadRegens(), loadSubmissions()]);
       if (alive) setReady(true);
     })();
     return () => {
       alive = false;
     };
-  }, [loadPlots, loadTrees, loadRegens]);
+  }, [loadPlots, loadTrees, loadRegens, loadSubmissions]);
 
   if (!ready) {
     return (

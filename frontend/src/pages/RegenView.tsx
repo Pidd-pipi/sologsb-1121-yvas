@@ -16,10 +16,12 @@ import {
   Typography,
   type TableProps,
 } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { PlusOutlined, LockOutlined } from '@ant-design/icons';
 import { usePlotStore } from '../stores/plotStore';
 import { useRegenStore } from '../stores/regenStore';
+import { useSubmissionStore } from '../stores/submissionStore';
 import RoundTag from '../components/common/RoundTag';
+import ReviewTag from '../components/common/ReviewTag';
 import {
   AGE_GROUPS,
   BROWSE_DAMAGES,
@@ -43,10 +45,26 @@ export default function RegenView() {
   const regens = useRegenStore((s) => s.items);
   const addRegen = useRegenStore((s) => s.add);
   const removeRegen = useRegenStore((s) => s.remove);
+  const latestSubmission = useSubmissionStore((s) => s.latest);
+
+  const rounds = useMemo(
+    () => Array.from(new Set(regens.filter((r) => r.plotId === id).map((r) => r.round))).sort((a, b) => a - b),
+    [regens, id],
+  );
+  const [round, setRound] = useState(plot?.surveyRound ?? 1);
+  useEffect(() => {
+    if (plot) setRound(plot.surveyRound);
+  }, [plot?.id]);
+
+  const submission = latestSubmission(id, round);
+  const frozen = submission?.status === 'submitted' || submission?.status === 'approved';
 
   const rows = useMemo(
-    () => regens.filter((r) => r.plotId === id).sort((a, b) => a.layer.localeCompare(b.layer) || b.heightCm - a.heightCm),
-    [regens, id],
+    () =>
+      regens
+        .filter((r) => r.plotId === id && r.round === round)
+        .sort((a, b) => a.layer.localeCompare(b.layer) || b.heightCm - a.heightCm),
+    [regens, id, round],
   );
 
   const [layerFilter, setLayerFilter] = useState<RegenLayer | 'all'>('all');
@@ -65,8 +83,8 @@ export default function RegenView() {
   const [toast, setToast] = useState('');
 
   useEffect(() => {
-    setForm((prev) => ({ ...prev, plotId: id, round: plot?.surveyRound ?? 1 }));
-  }, [id, plot?.surveyRound]);
+    setForm((prev) => ({ ...prev, plotId: id, round }));
+  }, [id, round]);
 
   useEffect(() => {
     if (!toast) return;
@@ -111,7 +129,14 @@ export default function RegenView() {
       title: '操作',
       width: 90,
       render: (_: unknown, row: RegenShrub) => (
-        <Button size="small" danger onClick={() => removeRegen(row.id)}>
+        <Button
+          size="small"
+          danger
+          disabled={frozen}
+          onClick={() => {
+            if (!frozen) void removeRegen(row.id);
+          }}
+        >
           删除
         </Button>
       ),
@@ -133,7 +158,8 @@ export default function RegenView() {
         <Typography.Title level={4} style={{ margin: 0 }}>
           更新苗与灌木层 · {plot.plotNo}
         </Typography.Title>
-        <RoundTag round={plot.surveyRound} locked={plot.locked} />
+        <RoundTag round={round} locked={plot.locked} />
+        <ReviewTag record={submission} />
         <Tag>样地面积 {plot.area} m²</Tag>
         <div style={{ flex: 1 }} />
         <Button type="link">
@@ -150,7 +176,46 @@ export default function RegenView() {
       {toast ? <Alert type="success" showIcon message={toast} closable onClose={() => setToast('')} /> : null}
       {error ? <Alert type="error" showIcon message={error} closable onClose={() => setError('')} /> : null}
 
-      <Card size="small" title="登记样方记录">
+      <Card size="small">
+        <Space wrap size={12}>
+          <span>
+            查看/登记期次
+            <Select
+              style={{ width: 130, marginLeft: 6 }}
+              value={round}
+              onChange={setRound}
+              options={(rounds.length ? rounds : [plot.surveyRound]).map((r) => ({
+                value: r,
+                label: `第 ${r} 期`,
+              }))}
+            />
+          </span>
+          <Typography.Text type="secondary">
+            下方统计与清单均为第 {round} 期数据
+          </Typography.Text>
+        </Space>
+      </Card>
+
+      <Card size="small" title={`登记第 ${round} 期样方记录`}>
+        {frozen ? (
+          <Alert
+            type={submission?.status === 'approved' ? 'success' : 'warning'}
+            showIcon
+            icon={<LockOutlined />}
+            message={
+              submission?.status === 'approved'
+                ? `第 ${round} 期已通过归档（v${submission.version}），更新苗与灌木资料永久只读`
+                : `第 ${round} 期已送审（v${submission.version}），审核期间停改`
+            }
+            description={
+              submission?.status === 'submitted'
+                ? '退回补录后才能继续登记；各送审版本与意见可在「送审审核」页查看。'
+                : submission?.reviewComment
+                  ? `归档意见：${submission.reviewComment}`
+                  : '归档版本与留档可在「送审审核」页回看。'
+            }
+          />
+        ) : (
         <Space wrap size={8}>
           <Select
             style={{ width: 110 }}
@@ -206,6 +271,10 @@ export default function RegenView() {
             type="primary"
             icon={<PlusOutlined />}
             onClick={async () => {
+              if (frozen) {
+                setError(`第 ${round} 期已停改，不能登记样方记录`);
+                return;
+              }
               if (!form.species.trim()) {
                 setError('种类必填');
                 return;
@@ -219,6 +288,7 @@ export default function RegenView() {
             保存记录
           </Button>
         </Space>
+        )}
       </Card>
 
       <Row gutter={12}>

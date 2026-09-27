@@ -16,12 +16,14 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { PlusOutlined } from '@ant-design/icons';
+import { PlusOutlined, LockOutlined } from '@ant-design/icons';
 import { usePlotStore } from '../stores/plotStore';
 import { useTreeStore } from '../stores/treeStore';
+import { useSubmissionStore } from '../stores/submissionStore';
 import { useTreeStats } from '../hooks/useTreeStats';
 import TreeTable from '../components/common/TreeTable';
 import RoundTag from '../components/common/RoundTag';
+import ReviewTag from '../components/common/ReviewTag';
 import {
   HEALTH_CLASSES,
   TREE_ORIGINS,
@@ -41,6 +43,7 @@ export default function TreeEntry() {
   const trees = useTreeStore((s) => s.items);
   const addTree = useTreeStore((s) => s.add);
   const updateTree = useTreeStore((s) => s.update);
+  const latestSubmission = useSubmissionStore((s) => s.latest);
 
   const rounds = useMemo(
     () => Array.from(new Set(trees.filter((t) => t.plotId === id).map((t) => t.round))).sort((a, b) => a - b),
@@ -53,6 +56,9 @@ export default function TreeEntry() {
 
   const stats = useTreeStats(id, round);
   const peers = trees.filter((t) => t.plotId === id);
+  // 送审冻结（待审核 / 已归档）按期判定，与「锁定往期」的人工锁定相互独立
+  const submission = latestSubmission(id, round);
+  const frozen = submission?.status === 'submitted' || submission?.status === 'approved';
 
   const [speciesFilter, setSpeciesFilter] = useState('all');
   const [form, setForm] = useState<TreeRecordDraft>({
@@ -89,6 +95,10 @@ export default function TreeEntry() {
   );
 
   const submit = async () => {
+    if (frozen) {
+      setError(`第 ${round} 期已${submission?.status === 'approved' ? '通过归档' : '送审'}，处于停改状态，不能录入样木`);
+      return;
+    }
     if (!form.treeNo.trim()) {
       setError('树号必填');
       return;
@@ -123,6 +133,7 @@ export default function TreeEntry() {
           样木录入 · {plot.plotNo}
         </Typography.Title>
         <RoundTag round={round} locked={plot.locked} />
+        <ReviewTag record={submission} />
         <Tag>{plot.forestType}</Tag>
         <Tag color="green">优势树种 {plot.dominantSpecies}</Tag>
         <div style={{ flex: 1 }} />
@@ -174,7 +185,28 @@ export default function TreeEntry() {
 
       <Row gutter={12}>
         <Col span={12}>
-          <Card size="small" title={`第 ${round} 期快速录入`}>
+          {frozen ? (
+            <Card size="small" title={`第 ${round} 期快速录入`}>
+              <Alert
+                type={submission?.status === 'approved' ? 'success' : 'warning'}
+                showIcon
+                icon={<LockOutlined />}
+                message={
+                  submission?.status === 'approved'
+                    ? `第 ${round} 期已通过归档（v${submission.version}），样木资料永久只读`
+                    : `第 ${round} 期已送审（v${submission.version}），审核期间停改`
+                }
+                description={
+                  submission?.status === 'submitted'
+                    ? '退回补录后才能继续录入；各送审版本与意见可在「送审审核」页查看。'
+                    : submission?.reviewComment
+                      ? `归档意见：${submission.reviewComment}`
+                      : '归档版本与留档可在「送审审核」页回看。'
+                }
+              />
+            </Card>
+          ) : (
+            <Card size="small" title={`第 ${round} 期快速录入`}>
             <Space wrap size={8}>
               <Input
                 style={{ width: 110 }}
@@ -275,7 +307,8 @@ export default function TreeEntry() {
             <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
               当前待录径阶：{diameterClassLabel(form.dbhCm)} cm（按「6/8/12/16/20/24/28/32+」径阶自动归组）
             </Typography.Paragraph>
-          </Card>
+            </Card>
+          )}
         </Col>
         <Col span={12}>
           <Card size="small" title="本期林分速览">
@@ -312,14 +345,21 @@ export default function TreeEntry() {
         </Col>
       </Row>
 
-      <Card size="small" title={`第 ${round} 期样木清单（${rows.length} 株，可点胸径单元格直接修改）`}>
+      <Card
+        size="small"
+        title={`第 ${round} 期样木清单（${rows.length} 株${frozen ? '，只读' : '，可点胸径单元格直接修改'}）`}
+      >
         <TreeTable
           items={rows}
           peers={peers}
-          onDbhChange={async (treeId, dbhCm) => {
-            await updateTree(treeId, { dbhCm });
-            setToast('胸径已更新，径阶与断面积同步重算');
-          }}
+          onDbhChange={
+            frozen
+              ? undefined
+              : async (treeId, dbhCm) => {
+                  await updateTree(treeId, { dbhCm });
+                  setToast('胸径已更新，径阶与断面积同步重算');
+                }
+          }
         />
       </Card>
     </Space>

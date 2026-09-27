@@ -18,12 +18,15 @@ import {
   Tag,
   Typography,
 } from 'antd';
-import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PlusOutlined, ReloadOutlined, SendOutlined } from '@ant-design/icons';
 import { usePlotStore } from '../stores/plotStore';
 import { useTreeStore } from '../stores/treeStore';
 import { useRegenStore } from '../stores/regenStore';
+import { useSubmissionStore } from '../stores/submissionStore';
 import { usePlotFilter } from '../hooks/usePlotFilter';
 import PlotCard from '../components/common/PlotCard';
+import ReviewTag from '../components/common/ReviewTag';
+import SubmitReviewModal from '../components/review/SubmitReviewModal';
 import { FOREST_TYPES, PLOT_SHAPES, type PlotDraft, type PlotShape } from '../types/plot';
 
 const EMPTY: PlotDraft = {
@@ -53,12 +56,16 @@ export default function PlotList() {
   const toggleLock = usePlotStore((s) => s.toggleLock);
   const trees = useTreeStore((s) => s.items);
   const regens = useRegenStore((s) => s.items);
+  const submissionLatest = useSubmissionStore((s) => s.latest);
   const { filters, patch, reset, result, options } = usePlotFilter();
 
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<PlotDraft>(EMPTY);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const [submitModal, setSubmitModal] = useState<{ open: boolean; plotId?: string }>({ open: false });
+
+  const closeSubmitModal = () => setSubmitModal({ open: false });
 
   useEffect(() => {
     if (!toast) return;
@@ -101,6 +108,12 @@ export default function PlotList() {
         <Tag>共 {plots.length} 个样地</Tag>
         <Tag color="blue">筛选命中 {result.length} 个</Tag>
         <div style={{ flex: 1 }} />
+        <Button icon={<SendOutlined />} onClick={() => navigate('/reviews')}>
+          送审审核
+        </Button>
+        <Button type="primary" ghost icon={<SendOutlined />} onClick={() => setSubmitModal({ open: true })}>
+          送审
+        </Button>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setOpen(true)}>
           新建样地
         </Button>
@@ -197,33 +210,62 @@ export default function PlotList() {
         <Empty description="没有符合条件的样地" />
       ) : (
         <Row gutter={[12, 12]}>
-          {result.map((plot) => (
-            <Col key={plot.id} xs={24} md={12} xl={8}>
-              <PlotCard
-                plot={plot}
-                treeCount={trees.filter((t) => t.plotId === plot.id && t.round === plot.surveyRound).length}
-                footer={
-                  <Space wrap size={4}>
-                    <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/trees`)}>
-                      样木录入
-                    </Button>
-                    <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/regen`)}>
-                      更新与灌木
-                    </Button>
-                    <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/recheck`)}>
-                      复查比对
-                    </Button>
-                    <Button size="small" type="link" onClick={() => navigate(`/summary/${plot.id}`)}>
-                      林分汇总
-                    </Button>
-                    <Button size="small" danger={!plot.locked} onClick={() => toggleLock(plot.id)}>
-                      {plot.locked ? '解锁往期' : '锁定往期'}
-                    </Button>
-                  </Space>
-                }
-              />
-            </Col>
-          ))}
+          {result.map((plot) => {
+            const latestSub = submissionLatest(plot.id, plot.surveyRound);
+            const submitLabel =
+              latestSub?.status === 'returned'
+                ? `重新送审 v${latestSub.version + 1}`
+                : latestSub?.status === 'submitted'
+                  ? '审核中'
+                  : latestSub?.status === 'approved'
+                    ? '已归档'
+                    : '送审';
+            const submitDisabled = latestSub?.status === 'submitted' || latestSub?.status === 'approved';
+            return (
+              <Col key={plot.id} xs={24} md={12} xl={8}>
+                <PlotCard
+                  plot={plot}
+                  treeCount={trees.filter((t) => t.plotId === plot.id && t.round === plot.surveyRound).length}
+                  extraTag={<ReviewTag record={latestSub} />}
+                  footer={
+                    <Space wrap size={4}>
+                      <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/trees`)}>
+                        样木录入
+                      </Button>
+                      <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/regen`)}>
+                        更新与灌木
+                      </Button>
+                      <Button size="small" type="link" onClick={() => navigate(`/plots/${plot.id}/recheck`)}>
+                        复查比对
+                      </Button>
+                      <Button size="small" type="link" onClick={() => navigate(`/summary/${plot.id}`)}>
+                        林分汇总
+                      </Button>
+                      <Button
+                        size="small"
+                        type="link"
+                        disabled={submitDisabled}
+                        icon={<SendOutlined />}
+                        onClick={() => setSubmitModal({ open: true, plotId: plot.id })}
+                      >
+                        {submitLabel}
+                      </Button>
+                      <Button
+                        size="small"
+                        type="link"
+                        onClick={() => navigate(`/reviews?plotId=${encodeURIComponent(plot.id)}`)}
+                      >
+                        送审记录
+                      </Button>
+                      <Button size="small" danger={!plot.locked} onClick={() => toggleLock(plot.id)}>
+                        {plot.locked ? '解锁往期' : '锁定往期'}
+                      </Button>
+                    </Space>
+                  }
+                />
+              </Col>
+            );
+          })}
         </Row>
       )}
 
@@ -313,6 +355,18 @@ export default function PlotList() {
           </Space>
         </Space>
       </Modal>
+
+      <SubmitReviewModal
+        open={submitModal.open}
+        presetPlotId={submitModal.plotId}
+        onClose={closeSubmitModal}
+        onSubmitted={(record) => {
+          const target = plots.find((p) => p.id === record.plotId);
+          setToast(
+            `「${target?.plotNo ?? ''}」第 ${record.round} 期资料已送审（v${record.version}），当期已停改，等待审核`,
+          );
+        }}
+      />
     </Space>
   );
 }

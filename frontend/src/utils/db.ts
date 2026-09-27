@@ -3,10 +3,11 @@ import type { Plot } from '../types/plot';
 import type { TreeRecord } from '../types/tree';
 import type { RegenShrub } from '../types/regen';
 import type { RecheckDiff } from '../types/recheck';
+import type { SubmissionRecord } from '../types/submission';
 import { newId } from './id';
 
 export const DB_NAME = 'gbforestplot';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbforestplot:db-version';
 
 class ForestPlotDB extends Dexie {
@@ -14,6 +15,7 @@ class ForestPlotDB extends Dexie {
   trees!: Table<TreeRecord, string>;
   regens!: Table<RegenShrub, string>;
   rechecks!: Table<RecheckDiff, string>;
+  submissions!: Table<SubmissionRecord, string>;
 
   constructor() {
     super(DB_NAME);
@@ -46,6 +48,14 @@ class ForestPlotDB extends Dexie {
             if (row.measuredAt === undefined) row.measuredAt = Date.now();
           });
       });
+    // v3：新增送审留档表；新表由 Dexie 自动建立，无需搬移老数据
+    this.version(3).stores({
+      plots: 'id, plotNo, locality, forestType, surveyRound, locked, createdAt',
+      trees: 'id, plotId, treeNo, species, round, status, measuredAt',
+      regens: 'id, plotId, layer, species, round, heightCm',
+      rechecks: 'id, plotId, baseRound, targetRound, treeNo, generatedAt',
+      submissions: 'id, plotId, round, version, status, submittedAt',
+    });
   }
 }
 
@@ -223,6 +233,30 @@ export async function ensureSeedData(): Promise<void> {
       plotId,
       layer: '更新苗',
       species: '红松',
+      heightCm: 18,
+      count: 12,
+      ageGroup: '2 年生',
+      distribution: '团状',
+      browseDamage: '无',
+      round: 1,
+    },
+    {
+      id: newId('regen'),
+      plotId,
+      layer: '灌木',
+      species: '毛榛子',
+      heightCm: 90,
+      count: 20,
+      ageGroup: '多年生',
+      distribution: '团状',
+      browseDamage: '轻度',
+      round: 1,
+    },
+    {
+      id: newId('regen'),
+      plotId,
+      layer: '更新苗',
+      species: '红松',
       heightCm: 32,
       count: 18,
       ageGroup: '3 年生',
@@ -268,9 +302,107 @@ export async function ensureSeedData(): Promise<void> {
     },
   ];
 
-  await db.transaction('rw', db.plots, db.trees, db.regens, db.rechecks, async () => {
+  await db.transaction('rw', db.plots, db.trees, db.regens, db.rechecks, db.submissions, async () => {
     await db.plots.bulkPut(plots);
     await db.trees.bulkPut(trees);
     await db.regens.bulkPut(regens);
+    await db.submissions.bulkPut(buildSeedSubmissions(plots, trees, regens, now));
   });
+}
+
+/**
+ * 示范送审留档：
+ * - FP-4102 第 1 期：第 1 版退回补录、第 2 版通过归档（展示历史版本与意见留档）
+ * - FP-4102 第 2 期：送审中（展示「提交后当期停改」）
+ */
+function buildSeedSubmissions(
+  plots: Plot[],
+  trees: TreeRecord[],
+  regens: RegenShrub[],
+  now: number,
+): SubmissionRecord[] {
+  const day = 24 * 3600 * 1000;
+  const plot1 = plots[0];
+
+  const snapshotFor = (round: number) => ({
+    plot: structuredClone(plot1),
+    trees: structuredClone(
+      trees
+        .filter((t) => t.plotId === plot1.id && t.round === round)
+        .sort((a, b) => a.treeNo.localeCompare(b.treeNo, 'zh-Hans-CN', { numeric: true })),
+    ),
+    regens: structuredClone(regens.filter((r) => r.plotId === plot1.id && r.round === round && r.layer !== '草本')),
+  });
+
+  const v1SubmittedAt = now - 330 * day;
+  const v1ReviewedAt = now - 320 * day;
+  const v2SubmittedAt = now - 300 * day;
+  const v2ReviewedAt = now - 290 * day;
+  const currentSubmittedAt = now - 5 * day;
+
+  const version1: SubmissionRecord = {
+    id: newId('sub'),
+    plotId: plot1.id,
+    round: 1,
+    version: 1,
+    status: 'returned',
+    submitter: '顾青',
+    submitNote: '第 1 期样木与更新苗记录，请办公室审核。',
+    submittedAt: v1SubmittedAt,
+    reviewer: '质检办 韩岭',
+    reviewComment: '12 号样桩冠幅缺测，更新苗高度级只填了一档，请补录后重新送审。',
+    reviewedAt: v1ReviewedAt,
+    history: [
+      { action: 'submit', at: v1SubmittedAt, actor: '顾青', comment: '第 1 期样木与更新苗记录，请办公室审核。' },
+      {
+        action: 'return',
+        at: v1ReviewedAt,
+        actor: '质检办 韩岭',
+        comment: '12 号样桩冠幅缺测，更新苗高度级只填了一档，请补录后重新送审。',
+      },
+    ],
+    snapshot: snapshotFor(1),
+  };
+
+  const version2: SubmissionRecord = {
+    id: newId('sub'),
+    plotId: plot1.id,
+    round: 1,
+    version: 2,
+    status: 'approved',
+    submitter: '顾青',
+    submitNote: '已按意见补齐冠幅与更新苗高度级，复审。',
+    submittedAt: v2SubmittedAt,
+    reviewer: '质检办 韩岭',
+    reviewComment: '资料齐全，通过归档。',
+    reviewedAt: v2ReviewedAt,
+    history: [
+      ...version1.history,
+      { action: 'submit', at: v2SubmittedAt, actor: '顾青', comment: '已按意见补齐冠幅与更新苗高度级，复审。' },
+      { action: 'approve', at: v2ReviewedAt, actor: '质检办 韩岭', comment: '资料齐全，通过归档。' },
+    ],
+    snapshot: snapshotFor(1),
+  };
+
+  const current: SubmissionRecord = {
+    id: newId('sub'),
+    plotId: plot1.id,
+    round: 2,
+    version: 1,
+    status: 'submitted',
+    submitter: '李慕',
+    submitNote: '第 2 期复查样木、更新苗与灌木已录完，含 4 号木采伐标注。',
+    submittedAt: currentSubmittedAt,
+    history: [
+      {
+        action: 'submit',
+        at: currentSubmittedAt,
+        actor: '李慕',
+        comment: '第 2 期复查样木、更新苗与灌木已录完，含 4 号木采伐标注。',
+      },
+    ],
+    snapshot: snapshotFor(2),
+  };
+
+  return [version1, version2, current];
 }
